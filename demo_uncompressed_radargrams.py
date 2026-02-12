@@ -7,6 +7,9 @@ without pulse compression (unfocused/raw radargrams).
 """
 
 import sys
+
+import demo_radargrams
+
 sys.path.insert(0, 'src')
 
 import matplotlib.pyplot as plt
@@ -14,8 +17,9 @@ import numpy as np
 from pathlib import Path
 from reason_pds_review import load_ppdp, apply_stacking, calculate_amplitude_db
 
+
 # Configuration
-data_dir = "../urn-nasa-pds-clipper.rea.partiallyprocessed/DATA/000MGA/2025060T1736"
+data_dir = demo_radargrams.data_dir
 output_dir = Path("outputs")
 output_dir.mkdir(exist_ok=True)
 

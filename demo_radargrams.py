@@ -13,13 +13,19 @@ Processing steps:
 5. Apply geometric correction using spacecraft altitude
 6. Visualize as amplitude in dB
 """
-
+from pathlib import Path
 import sys
+from bdb import BdbQuit
+
+#import matplotlib
+# Set the backend to QtAgg (must be before importing pyplot)
+#matplotlib.use('QtAgg') 
+import matplotlib.pyplot as plt
+
+import numpy as np
+
 sys.path.insert(0, 'src')
 
-import matplotlib.pyplot as plt
-import numpy as np
-from pathlib import Path
 from reason_pds_review import (
     load_ppdp,
     generate_chirp,
@@ -27,11 +33,19 @@ from reason_pds_review import (
     apply_stacking,
     align_by_delay,
     geometric_correction,
-    calculate_amplitude_db
+    calculate_amplitude_db,
+    roll_radargram,
+    roll_radargram2,
 )
 
 # Configuration
-data_dir = "../urn-nasa-pds-clipper.rea.partiallyprocessed/DATA/000MGA/2025060T1736"
+#data_dir = "../urn-nasa-pds-clipper.rea.partiallyprocessed/DATA/000MGA/2025060T1736"
+#data_dir = '/disk/kea/SDS/targ/xtra/REASON/2025_PDS4_Review/20251003_draft5/PDS/bundle_pp/DATA/000MGA/2025060T1736'
+#data_dir = '/disk/kea/SDS/targ/xtra/REASON/2025_PDS4_Review/20251001_draft4/PDS/bundle_pp/DATA/000MGA/2025060T1736'
+#data_dir = '/disk/kea/SDS/targ/xtra/REASON/2025_PDS4_Review/20250910_draft3/PDS/bundle_pp/DATA/000MGA/2025060T1736'
+#data_dir = '/disk/kea/SDS/targ/xtra/REASON/2025_PDS4_Review/20250724_draft1/PDS/PARTIALLYPROCESSED/000M01'
+#data_dir = '/disk/kea/SDS/targ/xtra/REASON/2025_PDS4_Review/20250805_draft2/PDS/PARTIALLYPROCESSED/000XXX'
+data_dir = '/disk/kea/SDS/code/work/ngg/202507_sds2pds4/SDS2-PDS4/tests/out1_tt/PDS/bundle_pp/DATA/000MGA/2025060T1736'
 output_dir = Path("outputs")
 output_dir.mkdir(exist_ok=True)
 
@@ -81,11 +95,17 @@ def process_channel(channel_name, science_ds, eng_ds, med_ds, sample_rate, stack
 
     # Get dwell IDs to process each dwell separately
     dwell_ids = eng_ds['Dwell_ID'].values
-    unique_dwells = np.unique(dwell_ids)
+    unique_dwells = sorted(set(dwell_ids))
+    #assert min(unique_dwells) > 600
+    #assert max(unique_dwells) < 630
     print(f"  Found {len(unique_dwells)} dwells")
 
     # Process each dwell separately
     dwell_results = []
+    dly_roll_amounts = []
+    dwell_eng_vals = []
+    eng_keys = []
+    gc_roll_amounts = []
 
     for dwell_id in unique_dwells:
         # Get indices for this dwell
@@ -119,118 +139,110 @@ def process_channel(channel_name, science_ds, eng_ds, med_ds, sample_rate, stack
 
         # Step 2: Pulse compression
         compressed = pulse_compress(dwell_data, chirp, axis=1)
-
         # Step 3: Coherent stacking within dwell
-        if stack_factor > 1 and n_pulses >= stack_factor:
+        eng_keys = ['HW_RX_opening_ticks', 'TX_start_ticks', 'Chirp_length_ticks',
+                    'RX_window_length_ticks', 'Raw_active_mode_length', 'RX_delay_tracking_offset']
+        if stack_factor > 1: #   and n_pulses >= stack_factor:
             stacked = apply_stacking(compressed, stack_factor=stack_factor, axis=0)
 
             # Also stack engineering parameters for alignment
+
             eng_stacked = {}
-            for key in ['HW_RX_opening_ticks', 'TX_start_ticks', 'Chirp_length_ticks',
-                        'RX_window_length_ticks', 'Raw_active_mode_length']:
+            for key in eng_keys:
                 if key in eng_ds.data_vars:
                     # Take first value of each stack window
                     dwell_eng = eng_ds[key].values[dwell_indices]
                     eng_stacked[key] = dwell_eng[::stack_factor][:stacked.shape[0]]
+                    assert len(eng_stacked[key]) == len(stacked), "mismatch in eng dataset %s dwell %r" % (key, dwell_id)
             # Stack med data
             if med_ds is not None:
                 med_stacked = {}
                 for key in med_ds.data_vars:
                     dwell_med = med_ds[key].values[dwell_indices]
                     med_stacked[key] = dwell_med[::stack_factor][:stacked.shape[0]]
+                    assert len(med_stacked[key]) == len(stacked), "mismatch in med dataset %s dwell %r" % (key, dwell_id)
         else:
             stacked = compressed
             eng_stacked = {}
-            for key in ['HW_RX_opening_ticks', 'TX_start_ticks', 'Chirp_length_ticks',
-                        'RX_window_length_ticks', 'Raw_active_mode_length']:
+            for key in eng_keys:
                 if key in eng_ds.data_vars:
                     eng_stacked[key] = eng_ds[key].values[dwell_indices]
+                    assert len(eng_stacked[key]) == len(stacked), "mismatch in eng dataset %s dwell %r" % (key, dwell_id)
             med_stacked = {}
             if med_ds is not None:
                 for key in med_ds.data_vars:
                     med_stacked[key] = med_ds[key].values[dwell_indices]
+                    assert len(med_stacked[key]) == len(stacked), "mismatch in med dataset %s dwell %r" % (key, dwell_id)
 
         # Step 4: Align records within dwell by delay
         # TODO: I'm still missing some correction factor. See notes in align_by_delay
         
-        aligned = align_by_delay(
+        aligned, dly_roll_amount = align_by_delay(
             data=stacked,
             hw_rx_opening_ticks=eng_stacked['HW_RX_opening_ticks'],
             tx_start_ticks=eng_stacked['TX_start_ticks'],
             chirp_length_ticks=eng_stacked['Chirp_length_ticks'],
             rx_window_length_ticks=eng_stacked['RX_window_length_ticks'],
             raw_active_mode_length=eng_stacked['Raw_active_mode_length'],
+            rx_delay_tracking_offset=eng_stacked['RX_delay_tracking_offset'],
             axis=0
         )
 
-        dwell_results.append(aligned)
-
-    # Concatenate all dwells
-    print(f"  Concatenating {len(dwell_results)} dwells...")
-    all_data = np.concatenate(dwell_results, axis=0)
-    print(f"  Final shape after concatenation: {all_data.shape}")
-
-    # Step 5: Geometric correction (align to reference altitude)
-    # Shift all records to a common reference altitude using MED data
-    if med_ds is not None and 'SC_altitude_above_target_ellipsoid' in med_ds.data_vars:
-        print(f"  Applying geometric correction...")
+        # Step 5: Geometric delay correction
 
         # Get altitude data (in meters)
-        altitude_m = med_ds['SC_altitude_above_target_ellipsoid'].values
+        #altitude_m = med_stacked['SC_altitude_above_target_ellipsoid']
 
-        # Stack altitude to match stacked data if stacking was applied
-        if stack_factor > 1:
-            # Take first value of each stack window to match stacked data
-            altitude_stacked = altitude_m[::stack_factor][:all_data.shape[0]]
-        else:
-            altitude_stacked = altitude_m[:all_data.shape[0]]
+        # Leopold's calculation using fixed target body radius instead of ellipsoid
+        ref_altitude = 3398000.
+        altitude_m = med_stacked['SC_distance_from_target_center'] - ref_altitude
 
         # Convert to km
-        altitude_km = altitude_stacked / 1000.0
+        altitude_km = altitude_m / 1000.0
 
-        print(f"    Altitude range: {altitude_km.min():.1f} to {altitude_km.max():.1f} km")
-        
-
-        # Apply geometric correction using the library function
-        geometrically_corrected = geometric_correction(
-            data=all_data,
+        gc_roll_amount = geometric_correction(
+            data=stacked,
             altitude_km=altitude_km,
             sample_rate=sample_rate,
             axis=0
         )
 
-        # # Reference altitude for alignment
-        # # This aligns the top of the radargram to 3398 km altitude
-        # reference_altitude_km = 3398.0
-        # print(f"    Reference altitude: {reference_altitude_km:.1f} km")
-        #
-        # # Now shift to reference altitude
-        # # Calculate additional shift needed to align to reference altitude
-        # mean_altitude = altitude_km.mean()
-        # altitude_offset_km = reference_altitude_km - mean_altitude
 
-        # # Convert altitude offset to samples (two-way distance)
-        # c = 299792458  # Speed of light in m/s
-        # altitude_offset_m = altitude_offset_km * 1000
-        # range_offset_samples = (2 * altitude_offset_m) / (c / sample_rate)
-        # roll_amount = int(np.round(range_offset_samples))
+        #dwell_results.append(aligned)
+        dwell_results.append(stacked)
+        dly_roll_amounts.append(dly_roll_amount)
+        #dly_roll_amounts[-1] += 50 # for testing. shift by 50 samples 2026-02-11 meeting
+        dwell_eng_vals.append(eng_stacked)
+        gc_roll_amounts.append(gc_roll_amount)
 
-        # print(f"    Shifting to reference altitude: {roll_amount} samples")
 
-        # # Apply reference altitude shift to all records
-        # if roll_amount != 0:
-        #     geometrically_corrected = np.roll(geometrically_corrected, -roll_amount, axis=1)
+    # Concatenate all dwells
+    print(f"  Concatenating {len(dwell_results)} dwells...")
+    all_data = np.concatenate(dwell_results, axis=0)
+    arr_dly_roll_amounts = np.concatenate(dly_roll_amounts, axis=0)
+    assert len(all_data) == len(arr_dly_roll_amounts)
+    print(f"  Final shape after concatenation: {all_data.shape}")
 
-        print(f"    Geometric correction complete")
-    else:
-        print(f"  Geometric correction skipped")
-        geometrically_corrected = all_data
+    # Step 5: Geometric correction (align to reference altitude)
+    arr_gc_roll_amounts = np.concatenate(gc_roll_amounts, axis=0)
+
+    # Roll correction for delay and geometric together
+    roll_amounts = -arr_dly_roll_amounts + arr_gc_roll_amounts
+    # just do a relative shift
+    roll_amounts1 = roll_amounts - np.mean(roll_amounts)
+    #geometrically_corrected = roll_radargram(data=all_data, roll_amounts=roll_amounts1, axis=0)
+    geometrically_corrected = roll_radargram2(data=all_data, roll_amounts=roll_amounts1)
+
 
     # Step 6: Convert to amplitude in dB for visualization
     print(f"  Converting to amplitude (dB)...")
     amplitude_db = calculate_amplitude_db(geometrically_corrected)
 
-    return amplitude_db
+    # Step 7: calculate roll amounts for additional visualization
+    eng = {k: np.concatenate([d[k] for d in dwell_eng_vals])
+    for k in eng_keys}
+    
+    return amplitude_db, (arr_dly_roll_amounts, arr_gc_roll_amounts, roll_amounts, eng)
 
 
 def main():
@@ -257,7 +269,6 @@ def main():
         'VHF_FULL': 12e6, # 12 MHz
         'VHF_NEGX': 12e6  # 12 MHz
     }
-
     # Create 2x2 subplot figure with shared y-axis
     fig, axes = plt.subplots(2, 2, figsize=(18, 12), sharey=True)
     axes = axes.flatten()
@@ -292,19 +303,24 @@ def main():
         stack_factor = STACKING.get(channel_name, 1)
 
         try:
-            amplitude_db = process_channel(
+            amplitude_db, (dly_roll_amounts, gc_roll_amounts, roll_amounts, eng) = process_channel(
                 channel_name, science, engineering, med, sample_rate, stack_factor
             )
             channel_data[channel_name] = {
                 'amplitude_db': amplitude_db,
                 'science': science,
-                'stack_factor': stack_factor
+                'stack_factor': stack_factor,
+                'dly_roll_amounts': dly_roll_amounts,
+                'gc_roll_amounts': gc_roll_amounts,
+                'total_roll_amounts': roll_amounts,
+                'eng': eng,
             }
 
             # Calculate fast time range for this channel
             fast_time_max = float(science.coords['fast_time'].max())
             max_fast_time_us = max(max_fast_time_us, fast_time_max)
-
+        except (BdbQuit, KeyboardInterrupt):
+            raise
         except Exception as e:
             print(f"Error processing {channel_name}: {e}")
             import traceback
@@ -340,7 +356,7 @@ def main():
                        extent=[0, amplitude_db.shape[0],
                                science.coords['fast_time'].max(),
                                science.coords['fast_time'].min()])
-
+        breakpoint()
         # Set y-axis limits for all plots
         ax.set_ylim(max_fast_time_us, 0)
 
@@ -381,14 +397,157 @@ def main():
 
     plt.tight_layout()
 
-    # Save figure
+    # Save figures
     output_file = output_dir / "radargrams.png"
     plt.savefig(output_file, dpi=75, bbox_inches='tight')
+
     print(f"\n{'='*60}")
     print(f"✓ Pulse-compressed radargrams saved to: {output_file.absolute()}")
     print(f"{'='*60}")
+    plt.close(fig)
+
+
+    # Create 2x2 subplot figure with shared y-axis for roll
+    fig2, axes2 = plt.subplots(2, 2, figsize=(18, 12), sharey=True)
+    axes2 = axes2.flatten()
+
+    # Plot each channel's roll components
+    for idx, channel_name in enumerate(CHANNEL_ORDER):
+        if channel_name not in channel_data:
+            continue
+
+        data = channel_data[channel_name]
+        #amplitude_db = data['amplitude_db']
+        science = data['science']
+        stack_factor = data['stack_factor']
+        ax = axes2[idx]
+
+        # Filter valid data for percentile calculation
+        #valid_data = amplitude_db[amplitude_db > -100]
+        sample_rate = SAMPLE_RATES[channel_name] / 1e6
+
+        # Plot
+        ax.plot(data['dly_roll_amounts'] / sample_rate, label='Delay')
+        ax.plot(data['gc_roll_amounts'] / sample_rate, label='Geom')
+        #ax.plot(data['total_roll_amounts'] / sample_rate, label='Total')
+        ax.legend()
+        
+
+        ## Set y-axis limits for all plots
+        #ax.set_ylim(max_fast_time_us, 0)
+
+        # Labels and title
+        ax.set_xlabel('Slow Time (Pulse Number)', fontsize=10)
+        ax.set_ylabel('Fast Time (μs)', fontsize=10)
+        ax.grid(True)
+
+        description = science.attrs.get('description', '')
+        frequency = science.attrs.get('frequency', '')
+        title_parts = [f"{channel_name} ({frequency})"]
+        if description:
+            title_parts.append(description)
+        if stack_factor > 1:
+            title_parts.append(f'{stack_factor}x stacked')
+        title_parts.append('Roll Amounts')
+
+        ax.set_title('\n'.join([title_parts[0], ', '.join(title_parts[1:])]),
+                     fontsize=11, fontweight='bold')
+
+    plt.tight_layout()
+    output_file = output_dir / "radargrams_roll.png"
+    plt.savefig(output_file, dpi=75, bbox_inches='tight')
+    plt.close(fig2)
+
+
+    # Create 2x2 subplot figure with shared y-axis for roll
+    fig3, axes3 = plt.subplots(2, 2, figsize=(18, 12), sharey=False)
+    axes3 = axes3.flatten()
+    ax_lims = {
+        'HF': {'x': (10915 // 2 - 500, 10915 // 2 + 500), 'y': (0, 16), 'y2': (0, 140)}
+        #'VHF_POSX': 20,
+        #'VHF_FULL': 20,
+        #'VHF_NEGX': 20
+    }
+    # Plot each channel's roll total
+    for idx, channel_name in enumerate(CHANNEL_ORDER):
+        if channel_name not in channel_data:
+            continue
+
+        data = channel_data[channel_name]
+        #amplitude_db = data['amplitude_db']
+        science = data['science']
+        stack_factor = data['stack_factor']
+        ax = axes3[idx]
+
+        # Filter valid data for percentile calculation
+        #valid_data = amplitude_db[amplitude_db > -100]
+        sample_rate = SAMPLE_RATES[channel_name] / 1e6
+        tick_rate = 48e6 / 1e6
+        #breakpoint()
+        # Plot
+        ax2 = ax.twinx()
+        total_roll = data['total_roll_amounts'] / sample_rate
+        total_roll = total_roll - np.min(total_roll)
+        ax.plot(total_roll, color='purple', label='Total (zeroed)')
+        rxtx = (data['eng']['HW_RX_opening_ticks'] - data['eng']['TX_start_ticks']) / tick_rate
+        rxtx = rxtx - np.min(rxtx)
+        ax2.plot(rxtx, color='red', label='rxtx (zeroed)')
+        geom = data['gc_roll_amounts'] / sample_rate
+        geom = geom - np.min(geom)
+        ax2.plot(geom, label='Geom (zeroed)')
+        plot_min_line(ax2, geom)
+        #ax.plot(data['eng']['Chirp_length_ticks'] / tick_rate, label='Chirp_length (not used)')
+        ax.plot(data['eng']['RX_delay_tracking_offset'] / 32. / tick_rate, label='RX_delay_tracking')
+        ax.grid(True)
+        ax.legend()
+        ax2.legend()
+        
+
+        ## Set y-axis limits for all plots
+        #ax.set_ylim(max_fast_time_us, 0)
+
+        # Labels and title
+        ax.set_xlabel('Slow Time (Pulse Number)', fontsize=10)
+        ax.set_ylabel('Fast Time (μs)', fontsize=10)
+        ax2.set_ylabel('rxtx/geom - Fast Time (μs)', fontsize=10)
+
+        ax.grid(True)
+
+        description = science.attrs.get('description', '')
+        frequency = science.attrs.get('frequency', '')
+        title_parts = [f"{channel_name} ({frequency})"]
+        if description:
+            title_parts.append(description)
+        if stack_factor > 1:
+            title_parts.append(f'{stack_factor}x stacked')
+        title_parts.append('Roll Amounts')
+
+        ax.set_title('\n'.join([title_parts[0], ', '.join(title_parts[1:])]),
+                     fontsize=11, fontweight='bold')
+
+        ''' only needed for full flight
+        ax.set_xlim(ax_lims[channel_name]['x'])
+        ax2.set_xlim(ax_lims[channel_name]['x'])
+        ax.set_ylim(ax_lims[channel_name]['y'])
+        ax2.set_ylim(ax_lims[channel_name]['y2'])
+        '''
+
+    plt.tight_layout()
+    output_file = output_dir / "radargrams_roll_total.png"
+    plt.savefig(output_file, dpi=75, bbox_inches='tight')
+    plt.close(fig3)
+
 
     print("\nDemo completed successfully!")
+
+
+def plot_min_line(ax2, geom):
+    gmin = geom.min()
+    gmax = geom.max()
+    idx_min = np.argmin(geom)
+    ax2.plot([idx_min, idx_min], [gmin, gmax],
+        color='black', alpha=0.5,
+        label=f'closest approach (idx={idx_min:d})')
 
 
 if __name__ == '__main__':

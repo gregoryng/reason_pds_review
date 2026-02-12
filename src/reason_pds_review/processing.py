@@ -291,6 +291,7 @@ def align_by_delay(data: np.ndarray,
                    chirp_length_ticks: np.ndarray,
                    rx_window_length_ticks: np.ndarray,
                    raw_active_mode_length: np.ndarray,
+                   rx_delay_tracking_offset: np.ndarray,
                    axis: int = 0) -> np.ndarray:
     """
     Align fast time records by rolling to account for varying delays.
@@ -331,10 +332,10 @@ def align_by_delay(data: np.ndarray,
 
     Each fast time record is then rolled by the computed sample offset.
     """
-    aligned_data = data.copy()
+    aligned_data = None #data.copy()
 
     # Calculate delay in ticks for each pulse
-    delay_ticks = (hw_rx_opening_ticks - tx_start_ticks) + chirp_length_ticks
+    delay_ticks = (hw_rx_opening_ticks - tx_start_ticks + rx_delay_tracking_offset/32.)# + chirp_length_ticks
 
     # TODO: Documentation says:
     # The delay between the transmit pulse and the start of the receive window is
@@ -346,15 +347,18 @@ def align_by_delay(data: np.ndarray,
 
     # I believe I'm still missing some correction factor that varies by dwell here, but
     # I haven't been able to figure out what.
-
+    # sample rate in samples per tick
     sample_rate = raw_active_mode_length / rx_window_length_ticks
     delay_samples = delay_ticks * sample_rate
 
     # Compute roll amounts relative to first pulse
-    reference_delay = delay_samples[0]
+    reference_delay = 0 #delay_samples[0]
     roll_amounts = np.round(delay_samples - reference_delay).astype(int)
+    # zero out for testing
+    #roll_amounts[:] = 0
 
     # Roll each fast time record
+    ''' disabled
     for i in range(aligned_data.shape[axis]):
         if axis == 0:
             aligned_data[i, :] = np.roll(aligned_data[i, :], -roll_amounts[i])
@@ -362,8 +366,8 @@ def align_by_delay(data: np.ndarray,
             aligned_data[:, i] = np.roll(aligned_data[:, i], -roll_amounts[i])
         else:
             raise ValueError("axis must be 0 or 1 for 2D data")
-
-    return aligned_data
+    '''
+    return aligned_data, delay_samples
 
 
 def geometric_correction(data: np.ndarray,
@@ -403,7 +407,7 @@ def geometric_correction(data: np.ndarray,
     """
     c = 299792458  # Speed of light in m/s
 
-    corrected_data = data.copy()
+    corrected_data = None #data.copy()
 
     # Calculate two-way range in samples
     # altitude_km * 1000 = altitude in meters
@@ -411,9 +415,17 @@ def geometric_correction(data: np.ndarray,
     # Sample distance = c / sample_rate
     range_samples = (2 * altitude_km * 1000) / (c / sample_rate)
 
+    return range_samples
+
+    ''' no
     # Compute roll amounts relative to first pulse
+
     reference_range = range_samples[0]
-    roll_amounts = np.round(range_samples - reference_range).astype(int)
+
+    roll_amounts = range_samples - reference_range
+    roll_amounts = np.round(roll_amounts).astype(int)
+    # zero out for testing
+    #roll_amounts[:] = 0
 
     # Roll each fast time record
     # Positive roll_amounts means higher altitude -> later delay -> shift right (positive roll)
@@ -425,4 +437,39 @@ def geometric_correction(data: np.ndarray,
         else:
             raise ValueError("axis must be 0 or 1 for 2D data")
 
+    return corrected_data, roll_amounts
+    '''
+
+
+def roll_radargram2(data:np.ndarray, roll_amounts:np.ndarray):
+    axis = 0
+    corrected_data = np.empty_like(data)
+    reference_roll = 0 #roll_amounts[0]
+    roll_amounts1 = np.round(roll_amounts - reference_roll).astype(int)
+    assert len(roll_amounts1) == corrected_data.shape[axis]
+    
+    # Roll each fast time record
+    # Positive roll_amounts means higher altitude -> later delay -> shift right (positive roll)
+    for i, nsamples in enumerate(roll_amounts1):
+        corrected_data[i, :] = np.roll(data[i, :], nsamples)# % data.shape[1])
+
+    return corrected_data
+
+
+def roll_radargram(data:np.ndarray, roll_amounts:np.ndarray, axis:int=0):
+
+    corrected_data = np.empty_like(data)
+    reference_roll = 0 #roll_amounts[0]
+    roll_amounts1 = np.round(roll_amounts - reference_roll).astype(int)
+    assert len(roll_amounts1) == corrected_data.shape[axis]
+    
+    # Roll each fast time record
+    # Positive roll_amounts means higher altitude -> later delay -> shift right (positive roll)
+    for i, nsamples in enumerate(roll_amounts1):
+        if axis == 0:
+            corrected_data[i, :] = np.roll(data[i, :], nsamples)# % data.shape[1])
+        elif axis == 1:
+            corrected_data[:, i] = np.roll(data[:, i], nsamples) #% data.shape[0])
+        else:
+            raise ValueError("axis must be 0 or 1 for 2D data")
     return corrected_data
