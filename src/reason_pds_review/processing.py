@@ -169,8 +169,39 @@ def calculate_amplitude_db(complex_data: Union[np.ndarray, xr.DataArray],
     else:
         return amplitude_db
 
-
 def generate_chirp(chirp_start_freq: float,
+                   chirp_end_freq: float,
+                   chirp_length_ticks: int,
+                   sample_rate: float,
+                   window: str = None) -> np.ndarray:
+    """
+    Generate complex baseband chirp equivalent to original make_chirp().
+    Window argument is ignored to preserve original behavior.
+    """
+    fc = (chirp_start_freq + chirp_end_freq) / 2
+    chirp_start_freq -= fc
+    chirp_end_freq -= fc
+
+    # Convert ticks (48 MHz clock) to seconds
+    duration_sec = chirp_length_ticks / 48e6
+
+    # Number of samples at requested sample rate
+    duration_samples = int(duration_sec * sample_rate)
+
+    # Time vector equivalent to np.arange(0, T, 1/fs)
+    t = np.arange(duration_samples) / sample_rate
+
+    # Linear chirp phase (identical to original implementation)
+    phase = 2 * np.pi * (
+        chirp_start_freq * t +
+        (chirp_end_freq - chirp_start_freq) * t**2 / (2 * duration_sec)
+    )
+
+    chirp_win = None
+    return np.exp(1j * phase), chirp_win
+
+
+def generate_chirp_old(chirp_start_freq: float,
                    chirp_end_freq: float,
                    chirp_length_ticks: int,
                    sample_rate: float,
@@ -226,12 +257,13 @@ def generate_chirp(chirp_start_freq: float,
     duration_samples = int(duration_sec * sample_rate)
 
     # Time vector for the chirp
-    t = np.linspace(0, duration_sec, duration_samples)
+    t = np.linspace(0, duration_sec, duration_samples, endpoint=False)
 
     # Generate complex linear chirp
     chirp_complex = signal.chirp(t, f0=f0, f1=f1, t1=t[-1], method='linear', phi=0, complex=True)
 
     # Apply window to suppress sidelobes
+    win = np.ones(len(t))
     if window is not None and window.lower() != 'none':
         if window.lower() == 'hann':
             win = np.hanning(len(t))
@@ -244,10 +276,51 @@ def generate_chirp(chirp_start_freq: float,
 
         chirp_complex = chirp_complex * win
 
-    return chirp_complex
+    return chirp_complex, win
 
 
 def pulse_compress(data: np.ndarray,
+                   chirp: np.ndarray,
+                   axis: int = -1) -> np.ndarray:
+    """
+    Pulse compression using FFT-based circular correlation,
+    matching former implementation.
+    """
+
+    # Ensure chirp length matches data length along axis
+    N = data.shape[axis]
+
+    if chirp.shape[0] != N:
+        #raise ValueError("Chirp length must match data length for circular FFT method.")
+        # zero pad to data
+        #padded = np.zeros(N, dtype=chirp.dtype)
+        #padded[:chirp.shape[0]] = chirp
+        padded = np.pad(chirp, (N - len(chirp), 0), 'constant', constant_values=0)
+        chirp = padded
+
+    # FFT along specified axis
+    data_fft = np.fft.fft(np.conjugate(data), axis=axis)
+    chirp_fft = np.fft.fft(chirp, n=N)
+
+    # Multiply in frequency domain (broadcast chirp over slow-time dimension)
+    result_fft = data_fft * np.expand_dims(chirp_fft, tuple(
+        i for i in range(data.ndim) if i != axis
+    ))
+
+    # Apply frequency-domain Hamming window (with fftshift like original)
+    window = np.fft.fftshift(np.hamming(N))
+    window_shape = [1] * data.ndim
+    window_shape[axis] = N
+    window = window.reshape(window_shape)
+
+    result_fft *= window
+
+    # Inverse FFT to obtain compressed signal
+    compressed = np.fft.ifft(result_fft, axis=axis)
+
+    return compressed
+
+def pulse_compress_old(data: np.ndarray,
                    chirp: np.ndarray,
                    axis: int = -1) -> np.ndarray:
     """
@@ -283,6 +356,30 @@ def pulse_compress(data: np.ndarray,
     )
 
     return compressed
+
+def pulse_compress_match_fft(data: np.ndarray,
+                             chirp: np.ndarray,
+                             axis: int = -1) -> np.ndarray:
+    """
+    Reproduce:
+        ifft( fft(chirp) * fft(conj(data)) )
+
+    using scipy.signal.correlate, compare with DAY
+    """
+
+    N = data.shape[axis]
+
+    def _process(m):
+        # Circular correlation equivalent
+        # correlate(chirp, conj(m)) gives linear correlation,
+        # so we take 'full' and wrap manually.
+        full = signal.correlate(chirp, np.conjugate(m), mode='full')
+
+        # Extract first N samples to mimic circular result
+        return full[:N]
+
+    return np.apply_along_axis(_process, axis, data)
+
 
 
 def align_by_delay(data: np.ndarray,

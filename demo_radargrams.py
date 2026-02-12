@@ -29,7 +29,7 @@ sys.path.insert(0, 'src')
 from reason_pds_review import (
     load_ppdp,
     generate_chirp,
-    pulse_compress,
+    pulse_compress, pulse_compress_match_fft,
     apply_stacking,
     align_by_delay,
     geometric_correction,
@@ -129,12 +129,12 @@ def process_channel(channel_name, science_ds, eng_ds, med_ds, sample_rate, stack
         assert np.all(eng_ds['Chirp_length_ticks'].values[dwell_indices] == chirp_length), \
             "Chirp length varies within dwell"
 
-        chirp = generate_chirp(
+        chirp, chirp_win = generate_chirp(
             chirp_start_freq=chirp_start,
             chirp_end_freq=chirp_end,
             chirp_length_ticks=chirp_length,
             sample_rate=sample_rate,
-            window='hann'
+            window='hamming' # changed from hann to hamming to match day code
         )
 
         # Step 2: Pulse compression
@@ -356,7 +356,6 @@ def main():
                        extent=[0, amplitude_db.shape[0],
                                science.coords['fast_time'].max(),
                                science.coords['fast_time'].min()])
-        breakpoint()
         # Set y-axis limits for all plots
         ax.set_ylim(max_fast_time_us, 0)
 

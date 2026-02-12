@@ -5,7 +5,7 @@ from .processing import (
     apply_stacking,
     calculate_amplitude_db,
     generate_chirp,
-    pulse_compress,
+    pulse_compress, pulse_compress_match_fft,
     align_by_delay,
     geometric_correction,
     roll_radargram,
