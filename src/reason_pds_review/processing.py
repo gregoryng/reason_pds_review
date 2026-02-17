@@ -291,7 +291,8 @@ def align_by_delay(data: np.ndarray,
                    chirp_length_ticks: np.ndarray,
                    rx_window_length_ticks: np.ndarray,
                    raw_active_mode_length: np.ndarray,
-                   axis: int = 0) -> np.ndarray:
+                   axis: int = 0,
+                   reference_delay_samples: Optional[float] = None) -> np.ndarray:
     """
     Align fast time records by rolling to account for varying delays.
 
@@ -315,6 +316,9 @@ def align_by_delay(data: np.ndarray,
         Raw active mode length (number of fast time samples) for each pulse
     axis : int, optional
         Axis corresponding to slow time (default: 0)
+    reference_delay_samples : float, optional
+        Global reference delay in samples. If None, uses the first pulse's delay.
+        Pass an explicit value to maintain alignment across multiple dwells.
 
     Returns
     -------
@@ -324,7 +328,10 @@ def align_by_delay(data: np.ndarray,
     Notes
     -----
     The delay between transmit pulse and receive window start is:
-        delay_ticks = (hw_rx_opening_ticks - tx_start_ticks) + chirp_length_ticks
+        delay_ticks = (hw_rx_opening_ticks - tx_start_ticks)
+
+    chirp_length_ticks is NOT included because pulse compression via
+    scipy.signal.correlate(mode='same') centers the output.
 
     This is converted to samples using the sample rate derived from:
         sample_rate = raw_active_mode_length / rx_window_length_ticks
@@ -333,33 +340,29 @@ def align_by_delay(data: np.ndarray,
     """
     aligned_data = data.copy()
 
-    # Calculate delay in ticks for each pulse
-    delay_ticks = (hw_rx_opening_ticks - tx_start_ticks) + chirp_length_ticks
-
-    # TODO: Documentation says:
-    # The delay between the transmit pulse and the start of the receive window is
-    # (ENG:HW_RX_opening_ticks - ENG:TX_start_ticks), and offsets resulting from the
-    # variability of the chirp length is ENG:chirp_length_ticks; when converted to a
-    # number of fast time samples using the sample rate
-    # (ENG:raw_active_mode_length/ENG:RX_window_length_ticks), you can roll each fast
-    # time record array to align.
-
-    # I believe I'm still missing some correction factor that varies by dwell here, but
-    # I haven't been able to figure out what.
+    # Calculate delay in ticks for each pulse.
+    # chirp_length_ticks is excluded because scipy.signal.correlate(mode='same')
+    # centers the pulse compression output, so no chirp-length offset is needed.
+    delay_ticks = hw_rx_opening_ticks - tx_start_ticks
 
     sample_rate = raw_active_mode_length / rx_window_length_ticks
     delay_samples = delay_ticks * sample_rate
 
-    # Compute roll amounts relative to first pulse
-    reference_delay = delay_samples[0]
+    # Compute roll amounts relative to reference
+    if reference_delay_samples is not None:
+        reference_delay = reference_delay_samples
+    else:
+        reference_delay = delay_samples[0]
     roll_amounts = np.round(delay_samples - reference_delay).astype(int)
 
-    # Roll each fast time record
+    # Roll each fast time record.
+    # Positive delay change means RX window opens later -> surface appears earlier
+    # in the record -> roll forward (positive) to compensate.
     for i in range(aligned_data.shape[axis]):
         if axis == 0:
-            aligned_data[i, :] = np.roll(aligned_data[i, :], -roll_amounts[i])
+            aligned_data[i, :] = np.roll(aligned_data[i, :], roll_amounts[i])
         elif axis == 1:
-            aligned_data[:, i] = np.roll(aligned_data[:, i], -roll_amounts[i])
+            aligned_data[:, i] = np.roll(aligned_data[:, i], roll_amounts[i])
         else:
             raise ValueError("axis must be 0 or 1 for 2D data")
 
@@ -415,13 +418,14 @@ def geometric_correction(data: np.ndarray,
     reference_range = range_samples[0]
     roll_amounts = np.round(range_samples - reference_range).astype(int)
 
-    # Roll each fast time record
-    # Positive roll_amounts means higher altitude -> later delay -> shift right (positive roll)
+    # Roll each fast time record.
+    # Positive range change means higher altitude -> surface return arrives later
+    # -> roll backward (negative) to align with reference.
     for i in range(corrected_data.shape[axis]):
         if axis == 0:
-            corrected_data[i, :] = np.roll(corrected_data[i, :], roll_amounts[i])
+            corrected_data[i, :] = np.roll(corrected_data[i, :], -roll_amounts[i])
         elif axis == 1:
-            corrected_data[:, i] = np.roll(corrected_data[:, i], roll_amounts[i])
+            corrected_data[:, i] = np.roll(corrected_data[:, i], -roll_amounts[i])
         else:
             raise ValueError("axis must be 0 or 1 for 2D data")
 

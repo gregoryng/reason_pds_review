@@ -84,8 +84,9 @@ def process_channel(channel_name, science_ds, eng_ds, med_ds, sample_rate, stack
     unique_dwells = np.unique(dwell_ids)
     print(f"  Found {len(unique_dwells)} dwells")
 
-    # Process each dwell separately
-    dwell_results = []
+    # Pass 1: Pulse compress and stack each dwell, collect delay values
+    dwell_compressed = []
+    dwell_eng_stacked = []
 
     for dwell_id in unique_dwells:
         # Get indices for this dwell
@@ -132,12 +133,6 @@ def process_channel(channel_name, science_ds, eng_ds, med_ds, sample_rate, stack
                     # Take first value of each stack window
                     dwell_eng = eng_ds[key].values[dwell_indices]
                     eng_stacked[key] = dwell_eng[::stack_factor][:stacked.shape[0]]
-            # Stack med data
-            if med_ds is not None:
-                med_stacked = {}
-                for key in med_ds.data_vars:
-                    dwell_med = med_ds[key].values[dwell_indices]
-                    med_stacked[key] = dwell_med[::stack_factor][:stacked.shape[0]]
         else:
             stacked = compressed
             eng_stacked = {}
@@ -145,14 +140,25 @@ def process_channel(channel_name, science_ds, eng_ds, med_ds, sample_rate, stack
                         'RX_window_length_ticks', 'Raw_active_mode_length']:
                 if key in eng_ds.data_vars:
                     eng_stacked[key] = eng_ds[key].values[dwell_indices]
-            med_stacked = {}
-            if med_ds is not None:
-                for key in med_ds.data_vars:
-                    med_stacked[key] = med_ds[key].values[dwell_indices]
 
-        # Step 4: Align records within dwell by delay
-        # TODO: I'm still missing some correction factor. See notes in align_by_delay
-        
+        dwell_compressed.append(stacked)
+        dwell_eng_stacked.append(eng_stacked)
+
+    # Compute global reference delay across all dwells
+    all_delay_samples = []
+    for eng_stacked in dwell_eng_stacked:
+        hw_rx = eng_stacked['HW_RX_opening_ticks']
+        tx_start = eng_stacked['TX_start_ticks']
+        rx_win = eng_stacked['RX_window_length_ticks']
+        raw_active = eng_stacked['Raw_active_mode_length']
+        sr = raw_active / rx_win
+        delay = (hw_rx - tx_start) * sr
+        all_delay_samples.append(delay)
+    global_ref_delay = np.concatenate(all_delay_samples)[0]
+
+    # Pass 2: Apply delay alignment with global reference
+    dwell_results = []
+    for stacked, eng_stacked in zip(dwell_compressed, dwell_eng_stacked):
         aligned = align_by_delay(
             data=stacked,
             hw_rx_opening_ticks=eng_stacked['HW_RX_opening_ticks'],
@@ -160,7 +166,8 @@ def process_channel(channel_name, science_ds, eng_ds, med_ds, sample_rate, stack
             chirp_length_ticks=eng_stacked['Chirp_length_ticks'],
             rx_window_length_ticks=eng_stacked['RX_window_length_ticks'],
             raw_active_mode_length=eng_stacked['Raw_active_mode_length'],
-            axis=0
+            axis=0,
+            reference_delay_samples=global_ref_delay,
         )
 
         dwell_results.append(aligned)
