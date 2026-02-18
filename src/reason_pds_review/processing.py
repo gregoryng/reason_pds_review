@@ -422,7 +422,7 @@ def align_by_delay(data: np.ndarray,
     Notes
     -----
     The delay between transmit pulse and receive window start is:
-        delay_ticks = (hw_rx_opening_ticks - tx_start_ticks) + chirp_length_ticks
+        delay_ticks = (hw_rx_opening_ticks - tx_start_ticks)
 
     This is converted to samples using the sample rate derived from:
         sample_rate = raw_active_mode_length / rx_window_length_ticks

@@ -227,7 +227,7 @@ def process_channel(channel_name, science_ds, eng_ds, med_ds, sample_rate, stack
     arr_gc_roll_amounts = np.concatenate(gc_roll_amounts, axis=0)
 
     # Roll correction for delay and geometric together
-    roll_amounts = -arr_dly_roll_amounts + arr_gc_roll_amounts
+    roll_amounts = (-arr_dly_roll_amounts + arr_gc_roll_amounts) * -1.0
     # just do a relative shift
     roll_amounts1 = roll_amounts - np.mean(roll_amounts)
     #geometrically_corrected = roll_radargram(data=all_data, roll_amounts=roll_amounts1, axis=0)
