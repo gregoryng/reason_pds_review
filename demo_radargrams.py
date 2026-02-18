@@ -31,7 +31,7 @@ from reason_pds_review import (
 )
 
 # Configuration
-data_dir = "../urn-nasa-pds-clipper.rea.partiallyprocessed/DATA/000MGA/2025060T1736"
+data_dir = '/disk/kea/SDS/code/work/ngg/202507_sds2pds4/SDS2-PDS4/tests/out1_tt/PDS/bundle_pp/DATA/000MGA/2025060T1736'
 output_dir = Path("outputs")
 output_dir.mkdir(exist_ok=True)
 
@@ -152,7 +152,7 @@ def process_channel(channel_name, science_ds, eng_ds, med_ds, sample_rate, stack
 
         # Step 4: Align records within dwell by delay
         # TODO: I'm still missing some correction factor. See notes in align_by_delay
-        
+        '''disable for testing
         aligned = align_by_delay(
             data=stacked,
             hw_rx_opening_ticks=eng_stacked['HW_RX_opening_ticks'],
@@ -162,6 +162,8 @@ def process_channel(channel_name, science_ds, eng_ds, med_ds, sample_rate, stack
             raw_active_mode_length=eng_stacked['Raw_active_mode_length'],
             axis=0
         )
+        '''
+        aligned = stacked
 
         dwell_results.append(aligned)
 
@@ -190,7 +192,7 @@ def process_channel(channel_name, science_ds, eng_ds, med_ds, sample_rate, stack
 
         print(f"    Altitude range: {altitude_km.min():.1f} to {altitude_km.max():.1f} km")
         
-
+        ''' disable for testing
         # Apply geometric correction using the library function
         geometrically_corrected = geometric_correction(
             data=all_data,
@@ -198,6 +200,8 @@ def process_channel(channel_name, science_ds, eng_ds, med_ds, sample_rate, stack
             sample_rate=sample_rate,
             axis=0
         )
+        '''
+        geometrically_corrected = all_data
 
         # # Reference altitude for alignment
         # # This aligns the top of the radargram to 3398 km altitude
@@ -343,6 +347,7 @@ def main():
 
         # Set y-axis limits for all plots
         ax.set_ylim(max_fast_time_us, 0)
+        ax.set_ylim(300, 200)
 
         # Labels and title
         ax.set_xlabel('Slow Time (Pulse Number)', fontsize=10)
