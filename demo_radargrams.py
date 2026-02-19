@@ -39,12 +39,6 @@ from reason_pds_review import (
 )
 
 # Configuration
-#data_dir = "../urn-nasa-pds-clipper.rea.partiallyprocessed/DATA/000MGA/2025060T1736"
-#data_dir = '/disk/kea/SDS/targ/xtra/REASON/2025_PDS4_Review/20251003_draft5/PDS/bundle_pp/DATA/000MGA/2025060T1736'
-#data_dir = '/disk/kea/SDS/targ/xtra/REASON/2025_PDS4_Review/20251001_draft4/PDS/bundle_pp/DATA/000MGA/2025060T1736'
-#data_dir = '/disk/kea/SDS/targ/xtra/REASON/2025_PDS4_Review/20250910_draft3/PDS/bundle_pp/DATA/000MGA/2025060T1736'
-#data_dir = '/disk/kea/SDS/targ/xtra/REASON/2025_PDS4_Review/20250724_draft1/PDS/PARTIALLYPROCESSED/000M01'
-#data_dir = '/disk/kea/SDS/targ/xtra/REASON/2025_PDS4_Review/20250805_draft2/PDS/PARTIALLYPROCESSED/000XXX'
 data_dir = '/disk/kea/SDS/code/work/ngg/202507_sds2pds4/SDS2-PDS4/tests/out1_tt/PDS/bundle_pp/DATA/000MGA/2025060T1736'
 output_dir = Path("outputs")
 output_dir.mkdir(exist_ok=True)
@@ -357,7 +351,8 @@ def main():
                                science.coords['fast_time'].max(),
                                science.coords['fast_time'].min()])
         # Set y-axis limits for all plots
-        ax.set_ylim(max_fast_time_us, 0)
+        #ax.set_ylim(max_fast_time_us, 0)
+        ax.set_ylim(200, 100)
 
         # Labels and title
         ax.set_xlabel('Slow Time (Pulse Number)', fontsize=10)
