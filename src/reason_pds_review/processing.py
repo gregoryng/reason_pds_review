@@ -4,7 +4,7 @@ import numpy as np
 import xarray as xr
 from typing import Union, Optional
 from scipy import signal
-
+from scipy.constants import speed_of_light
 
 def apply_stacking(data: Union[np.ndarray, xr.DataArray],
                    stack_factor: int,
@@ -179,6 +179,7 @@ def generate_chirp(chirp_start_freq: float,
     Window argument is ignored to preserve original behavior.
     """
     fc = (chirp_start_freq + chirp_end_freq) / 2
+    # Subtracting to set fc=0 makes HF come out correct.
     chirp_start_freq -= fc
     chirp_end_freq -= fc
 
@@ -411,6 +412,8 @@ def align_by_delay(data: np.ndarray,
         RX window length in ticks for each pulse (slow_time,)
     raw_active_mode_length : np.ndarray
         Raw active mode length (number of fast time samples) for each pulse
+    rx_delay_tracking_offset: np.ndarray
+        RX delay tracking offset in 1/32 ticks (slow_time,)
     axis : int, optional
         Axis corresponding to slow time (default: 0)
 
@@ -432,7 +435,7 @@ def align_by_delay(data: np.ndarray,
     aligned_data = None #data.copy()
 
     # Calculate delay in ticks for each pulse
-    delay_ticks = (hw_rx_opening_ticks - tx_start_ticks + rx_delay_tracking_offset/32.)# + chirp_length_ticks
+    delay_ticks = (hw_rx_opening_ticks - tx_start_ticks - rx_delay_tracking_offset/32.)# + chirp_length_ticks
 
     # TODO: Documentation says:
     # The delay between the transmit pulse and the start of the receive window is
@@ -449,8 +452,8 @@ def align_by_delay(data: np.ndarray,
     delay_samples = delay_ticks * sample_rate
 
     # Compute roll amounts relative to first pulse
-    reference_delay = 0 #delay_samples[0]
-    roll_amounts = np.round(delay_samples - reference_delay).astype(int)
+    #reference_delay = 0 #delay_samples[0]
+    #roll_amounts = delay_samples - reference_delay
     # zero out for testing
     #roll_amounts[:] = 0
 
@@ -502,7 +505,7 @@ def geometric_correction(data: np.ndarray,
     For subsurface analysis, use speed of light in ice (~169 m/µs).
     Each record is rolled to align the surface return.
     """
-    c = 299792458  # Speed of light in m/s
+    c = speed_of_light  # Speed of light in m/s
 
     corrected_data = None #data.copy()
 

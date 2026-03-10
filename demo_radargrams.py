@@ -100,6 +100,7 @@ def process_channel(channel_name, science_ds, eng_ds, med_ds, sample_rate, stack
     dwell_eng_vals = []
     eng_keys = []
     gc_roll_amounts = []
+    chirp_length_max = 0 # np.nanmax(eng_ds['Chirp_length_ticks'].values)
 
     for dwell_id in unique_dwells:
         # Get indices for this dwell
@@ -185,11 +186,11 @@ def process_channel(channel_name, science_ds, eng_ds, med_ds, sample_rate, stack
         # Step 5: Geometric delay correction
 
         # Get altitude data (in meters)
-        #altitude_m = med_stacked['SC_altitude_above_target_ellipsoid']
+        altitude_m = med_stacked['SC_altitude_above_target_ellipsoid']
 
         # Leopold's calculation using fixed target body radius instead of ellipsoid
-        ref_altitude = 3398000.
-        altitude_m = med_stacked['SC_distance_from_target_center'] - ref_altitude
+        #ref_altitude = 3398000.
+        #altitude_m = med_stacked['SC_distance_from_target_center'] - ref_altitude
 
         # Convert to km
         altitude_km = altitude_m / 1000.0
@@ -221,9 +222,9 @@ def process_channel(channel_name, science_ds, eng_ds, med_ds, sample_rate, stack
     arr_gc_roll_amounts = np.concatenate(gc_roll_amounts, axis=0)
 
     # Roll correction for delay and geometric together
-    roll_amounts = (-arr_dly_roll_amounts + arr_gc_roll_amounts) * -1.0
+    roll_amounts = (chirp_length_max-arr_dly_roll_amounts + arr_gc_roll_amounts) * -1.0
     # just do a relative shift
-    roll_amounts1 = roll_amounts - np.mean(roll_amounts)
+    roll_amounts1 = roll_amounts - np.mean(roll_amounts) # max(roll_amounts)
     #geometrically_corrected = roll_radargram(data=all_data, roll_amounts=roll_amounts1, axis=0)
     geometrically_corrected = roll_radargram2(data=all_data, roll_amounts=roll_amounts1)
 
@@ -267,6 +268,11 @@ def main():
     fig, axes = plt.subplots(2, 2, figsize=(18, 12), sharey=True)
     axes = axes.flatten()
 
+    # Create 2x2 subplot figure with shared y-axis to compare full VHF and HF
+    fig4, axes4 = plt.subplots(2, 2, figsize=(18, 12))
+    axes4 = axes4.flatten()
+
+
     # Calculate maximum fast time for shared y-axis
     max_fast_time_us = 0
     channel_data = {}
@@ -275,22 +281,27 @@ def main():
         if channel_name not in tree.children:
             print(f"Warning: {channel_name} not found in data")
             continue
-
         # Get science and engineering data
         science = tree[f'{channel_name}/science'].ds
 
+        channel_name1 = channel_name
+        #if channel_name == 'VHF_FULL':
+        #    channel_name1 = 'VHF_POSX'
+        #elif channel_name == 'HF':
+        #    channel_name1 = 'VHF_FULL'
+
         # Check if engineering data exists
-        channel_node = tree[channel_name]
+        channel_node = tree[channel_name1]
         if 'engineering' in channel_node.children:
-            engineering = tree[f'{channel_name}/engineering'].ds
+            engineering = tree[f'{channel_name1}/engineering'].ds
         else:
-            print(f"Warning: No engineering data for {channel_name}, skipping")
+            print(f"Warning: No engineering data for {channel_name1}, skipping")
             continue
 
         # Get MED data if available
         med = None
         if 'med' in channel_node.children:
-            med = tree[f'{channel_name}/med'].ds
+            med = tree[f'{channel_name1}/med'].ds
 
         # Process channel
         sample_rate = SAMPLE_RATES[channel_name]
@@ -309,7 +320,6 @@ def main():
                 'total_roll_amounts': roll_amounts,
                 'eng': eng,
             }
-
             # Calculate fast time range for this channel
             fast_time_max = float(science.coords['fast_time'].max())
             max_fast_time_us = max(max_fast_time_us, fast_time_max)
@@ -334,6 +344,15 @@ def main():
         stack_factor = data['stack_factor']
         ax = axes[idx]
 
+        # for these plots, redirect them to the comparison plot
+        fig1 = fig
+        if channel_name == 'HF':
+            ax = axes4[0]
+            fig1 = fig4
+        elif channel_name == 'VHF_FULL':
+            ax = axes4[1]
+            fig1 = fig4
+
         # Filter valid data for percentile calculation
         valid_data = amplitude_db[amplitude_db > -100]
 
@@ -350,9 +369,16 @@ def main():
                        extent=[0, amplitude_db.shape[0],
                                science.coords['fast_time'].max(),
                                science.coords['fast_time'].min()])
+
+        # Overlay lines between dwell boundaries
+        
+
         # Set y-axis limits for all plots
         #ax.set_ylim(max_fast_time_us, 0)
-        ax.set_ylim(200, 100)
+        # set y limit to match Thomas's plots
+        #ax.set_ylim(200, 100)
+        # set y limit smaller for plot debugging for Mars
+        ax.set_ylim(120, 170)
 
         # Labels and title
         ax.set_xlabel('Slow Time (Pulse Number)', fontsize=10)
@@ -371,7 +397,7 @@ def main():
                      fontsize=11, fontweight='bold')
 
         # Add colorbar
-        cbar = plt.colorbar(im, ax=ax, label='Amplitude (dB)', pad=0.02)
+        cbar = fig1.colorbar(im, ax=ax, label='Amplitude (dB)', pad=0.02)
 
         # Add statistics text
         stats_text = f"Range: [{valid_data.min():.1f}, {valid_data.max():.1f}] dB\n"
@@ -449,12 +475,12 @@ def main():
 
     plt.tight_layout()
     output_file = output_dir / "radargrams_roll.png"
-    plt.savefig(output_file, dpi=75, bbox_inches='tight')
+    fig2.savefig(output_file, dpi=75, bbox_inches='tight')
     plt.close(fig2)
 
 
     # Create 2x2 subplot figure with shared y-axis for roll
-    fig3, axes3 = plt.subplots(2, 2, figsize=(18, 12), sharey=False)
+    fig3, axes3 = plt.subplots(2, 2, figsize=(18, 12), sharey=True)
     axes3 = axes3.flatten()
     ax_lims = {
         'HF': {'x': (10915 // 2 - 500, 10915 // 2 + 500), 'y': (0, 16), 'y2': (0, 140)}
@@ -473,16 +499,29 @@ def main():
         stack_factor = data['stack_factor']
         ax = axes3[idx]
 
+        # for these plots, redirect them to the comparison plot
+        if channel_name == 'HF':
+            ax = axes4[2]
+        elif channel_name == 'VHF_FULL':
+            ax = axes4[3]
+
+
         # Filter valid data for percentile calculation
-        #valid_data = amplitude_db[amplitude_db > -100]
+        valid_data = amplitude_db[amplitude_db > -100]
         sample_rate = SAMPLE_RATES[channel_name] / 1e6
         tick_rate = 48e6 / 1e6
-        #breakpoint()
         # Plot
         ax2 = ax.twinx()
-        total_roll = data['total_roll_amounts'] / sample_rate
-        total_roll = total_roll - np.min(total_roll)
-        ax.plot(total_roll, color='purple', label='Total (zeroed)')
+        total_roll_us = data['total_roll_amounts'] / sample_rate
+        total_roll_us -= np.min(total_roll_us)
+        ax.plot(total_roll_us, color='purple', label='Total (zeroed)')
+
+        chirp_len_us = data['eng']['Chirp_length_ticks'] / tick_rate
+        # 2026-03-02 don't plot chirp_length (values between 180 and 125) because the value is the same for
+        # Shallow VHF and Full VHF, so it shouldn't be the culprit in our calculation
+        #ax.plot(chirp_len_us, color='green', label='chirp_length')
+
+
         rxtx = (data['eng']['HW_RX_opening_ticks'] - data['eng']['TX_start_ticks']) / tick_rate
         rxtx = rxtx - np.min(rxtx)
         ax2.plot(rxtx, color='red', label='rxtx (zeroed)')
@@ -528,8 +567,13 @@ def main():
 
     plt.tight_layout()
     output_file = output_dir / "radargrams_roll_total.png"
-    plt.savefig(output_file, dpi=75, bbox_inches='tight')
+    fig3.savefig(output_file, dpi=75, bbox_inches='tight')
     plt.close(fig3)
+
+    plt.tight_layout()
+    output_file = output_dir / "radargrams_roll_cmp.png"
+    fig4.savefig(output_file, dpi=75, bbox_inches='tight')
+    plt.close(fig4)
 
 
     print("\nDemo completed successfully!")
