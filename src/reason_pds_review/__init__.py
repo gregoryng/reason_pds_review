@@ -7,7 +7,8 @@ from .processing import (
     generate_chirp,
     pulse_compress,
     align_by_delay,
-    geometric_correction
+    geometric_delay,
+    roll_radargram
 )
 
 __all__ = [
@@ -17,6 +18,6 @@ __all__ = [
     'generate_chirp',
     'pulse_compress',
     'align_by_delay',
-    'geometric_correction'
+    'geometric_delay'
 ]
 __version__ = '0.1.0'

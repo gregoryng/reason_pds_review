@@ -285,15 +285,14 @@ def pulse_compress(data: np.ndarray,
     return compressed
 
 
-def align_by_delay(data: np.ndarray,
+def align_by_delay(
                    hw_rx_opening_ticks: np.ndarray,
                    tx_start_ticks: np.ndarray,
                    chirp_length_ticks: np.ndarray,
                    sample_rate: float,
-                   axis: int = 0,
-                   reference_delay_samples: Optional[float] = None) -> np.ndarray:
+                   ) -> np.ndarray:
     """
-    Align fast time records by rolling to account for varying delays.
+    Return amount to roll fast time records to account for varying delays.
 
     In the Partially Processed Data Product, dwell delays are varied to maintain
     tracking of the surface. This function aligns records by computing the delay
@@ -311,16 +310,11 @@ def align_by_delay(data: np.ndarray,
         Chirp length in ticks for each pulse (slow_time,)
     sample_rate : float
         Sample rate in Hz
-    axis : int, optional
-        Axis corresponding to slow time (default: 0)
-    reference_delay_samples : float, optional
-        Global reference delay in samples. If None, uses the first pulse's delay.
-        Pass an explicit value to maintain alignment across multiple dwells.
 
     Returns
     -------
     np.ndarray
-        Aligned radar data with same shape as input
+        Delay, in units of number of samples, to aligned radar data. With same length as input
 
     Notes
     -----
@@ -332,7 +326,6 @@ def align_by_delay(data: np.ndarray,
 
     Each fast time record is then rolled by the computed sample offset.
     """
-    aligned_data = data.copy()
 
     # Calculate delay in ticks for each pulse.
     # chirp_length_ticks is excluded because scipy.signal.correlate(mode='same')
@@ -342,52 +335,31 @@ def align_by_delay(data: np.ndarray,
     ticks_per_sample = 48e6 / sample_rate
     delay_samples = delay_ticks / ticks_per_sample
 
-    # Compute roll amounts relative to reference
-    if reference_delay_samples is not None:
-        reference_delay = reference_delay_samples
-    else:
-        reference_delay = delay_samples[0]
-    roll_amounts = np.round(delay_samples - reference_delay).astype(int)
-
-    # Roll each fast time record.
-    # Positive delay change means RX window opens later -> surface appears earlier
-    # in the record -> roll forward (positive) to compensate.
-    for i in range(aligned_data.shape[axis]):
-        if axis == 0:
-            aligned_data[i, :] = np.roll(aligned_data[i, :], roll_amounts[i])
-        elif axis == 1:
-            aligned_data[:, i] = np.roll(aligned_data[:, i], roll_amounts[i])
-        else:
-            raise ValueError("axis must be 0 or 1 for 2D data")
-
-    return aligned_data
+    return delay_samples
 
 
-def geometric_correction(data: np.ndarray,
+
+def geometric_delay(
                         altitude_km: np.ndarray,
                         sample_rate: float,
-                        axis: int = 0) -> np.ndarray:
+                        ) -> np.ndarray:
     """
-    Apply geometric correction by aligning records to reference ellipsoid range.
+    Calculate geometric correction delay to align records to reference ellipsoid range.
 
     Uses spacecraft altitude to compute range to reference ellipsoid and rolls
     each fast time record to align surface returns geometrically.
 
     Parameters
     ----------
-    data : np.ndarray
-        Complex radar data, typically shape (slow_time, fast_time)
     altitude_km : np.ndarray
         Spacecraft altitude above target ellipsoid in km (slow_time,)
     sample_rate : float
         Sample rate in Hz
-    axis : int, optional
-        Axis corresponding to slow time (default: 0)
 
     Returns
     -------
     np.ndarray
-        Geometrically corrected radar data with same shape as input
+        Delay in samples to geometrically correct radar data with same shape as input
 
     Notes
     -----
@@ -400,27 +372,25 @@ def geometric_correction(data: np.ndarray,
     """
     c = 299792458  # Speed of light in m/s
 
-    corrected_data = data.copy()
-
     # Calculate two-way range in samples
     # altitude_km * 1000 = altitude in meters
     # Two-way distance = 2 * altitude
     # Sample distance = c / sample_rate
     range_samples = (2 * altitude_km * 1000) / (c / sample_rate)
 
-    # Compute roll amounts relative to first pulse
-    reference_range = range_samples[0]
-    roll_amounts = np.round(range_samples - reference_range).astype(int)
+    return range_samples
 
-    # Roll each fast time record.
-    # Positive range change means higher altitude -> surface return arrives later
-    # -> roll backward (negative) to align with reference.
-    for i in range(corrected_data.shape[axis]):
-        if axis == 0:
-            corrected_data[i, :] = np.roll(corrected_data[i, :], -roll_amounts[i])
-        elif axis == 1:
-            corrected_data[:, i] = np.roll(corrected_data[:, i], -roll_amounts[i])
-        else:
-            raise ValueError("axis must be 0 or 1 for 2D data")
+
+def roll_radargram(data:np.ndarray, roll_amounts:np.ndarray)->np.ndarray:
+    axis = 0
+    corrected_data = np.empty_like(data)
+    reference_roll = 0 #roll_amounts[0]
+    roll_amounts1 = np.round(roll_amounts - reference_roll).astype(int)
+    assert len(roll_amounts1) == corrected_data.shape[axis]
+    
+    # Roll each fast time record
+    # Positive roll_amounts means higher altitude -> later delay -> shift right (positive roll)
+    for i, nsamples in enumerate(roll_amounts1):
+        corrected_data[i, :] = np.roll(data[i, :], nsamples)# % data.shape[1])
 
     return corrected_data

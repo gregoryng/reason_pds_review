@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Demo script for producing pulse-compressed (focused) radargrams.
+Demo script for producing pulse-compressed radargrams.
 
 This script loads REASON partially processed data and generates radargrams
 with full processing: pulse compression, delay alignment, and geometric correction.
@@ -9,9 +9,9 @@ Processing steps:
 1. Generate reference chirp from engineering data
 2. Apply pulse compression via matched filter
 3. Stack pulses within dwells for noise reduction
-4. Align records by varying delays between dwells
-5. Apply geometric correction using spacecraft altitude
-6. Visualize as amplitude in dB
+4. Calculate varying delays between dwells
+5. Calculate geometric correction using spacecraft altitude
+6. Align records using varying delays and geometric correction, and visualize as amplitude in dB
 """
 
 import sys
@@ -26,8 +26,9 @@ from reason_pds_review import (
     pulse_compress,
     apply_stacking,
     align_by_delay,
-    geometric_correction,
-    calculate_amplitude_db
+    geometric_delay,
+    calculate_amplitude_db,
+    roll_radargram
 )
 
 # Configuration
@@ -144,42 +145,28 @@ def process_channel(channel_name, science_ds, eng_ds, med_ds, sample_rate, stack
         dwell_compressed.append(stacked)
         dwell_eng_stacked.append(eng_stacked)
 
-    # Compute global reference delay across all dwells
-    all_delay_samples = []
-    for eng_stacked in dwell_eng_stacked:
-        hw_rx = eng_stacked['HW_RX_opening_ticks']
-        tx_start = eng_stacked['TX_start_ticks']
-        rx_win = eng_stacked['RX_window_length_ticks']
-        raw_active = eng_stacked['Raw_active_mode_length']
-        sr = raw_active / rx_win
-        delay = (hw_rx - tx_start) * sr
-        all_delay_samples.append(delay)
-    global_ref_delay = np.concatenate(all_delay_samples)[0]
 
-    # Pass 2: Apply delay alignment with global reference
-    dwell_results = []
+    # Pass 2: Calculate delay alignment in samples
+    dwells_hw_delays = []
     for stacked, eng_stacked in zip(dwell_compressed, dwell_eng_stacked):
-        aligned = align_by_delay(
-            data=stacked,
+        dwell_hw_delays = align_by_delay(
             hw_rx_opening_ticks=eng_stacked['HW_RX_opening_ticks'],
             tx_start_ticks=eng_stacked['TX_start_ticks'],
             chirp_length_ticks=eng_stacked['Chirp_length_ticks'],
             sample_rate=sample_rate,
-            axis=0,
-            reference_delay_samples=global_ref_delay,
         )
 
-        dwell_results.append(aligned)
+        dwells_hw_delays.append(dwell_hw_delays)
 
     # Concatenate all dwells
-    print(f"  Concatenating {len(dwell_results)} dwells...")
-    all_data = np.concatenate(dwell_results, axis=0)
-    print(f"  Final shape after concatenation: {all_data.shape}")
+    print(f"  Concatenating delays for {len(dwells_hw_delays)} dwells...")
+    all_hw_delays = np.concatenate(dwells_hw_delays, axis=0)
+    print(f"  Final shape after concatenation: {all_hw_delays.shape}")
 
     # Step 5: Geometric correction (align to reference altitude)
     # Shift all records to a common reference altitude using MED data
     if med_ds is not None and 'SC_altitude_above_target_ellipsoid' in med_ds.data_vars:
-        print(f"  Applying geometric correction...")
+        print(f"  Calculating geometric correction...")
 
         # Get altitude data (in meters)
         altitude_m = med_ds['SC_altitude_above_target_ellipsoid'].values
@@ -187,22 +174,19 @@ def process_channel(channel_name, science_ds, eng_ds, med_ds, sample_rate, stack
         # Stack altitude to match stacked data if stacking was applied
         if stack_factor > 1:
             # Take first value of each stack window to match stacked data
-            altitude_stacked = altitude_m[::stack_factor][:all_data.shape[0]]
+            altitude_stacked = altitude_m[::stack_factor][:all_hw_delays.shape[0]]
         else:
-            altitude_stacked = altitude_m[:all_data.shape[0]]
+            altitude_stacked = altitude_m[:all_hw_delays.shape[0]]
 
         # Convert to km
         altitude_km = altitude_stacked / 1000.0
 
         print(f"    Altitude range: {altitude_km.min():.1f} to {altitude_km.max():.1f} km")
-        
 
         # Apply geometric correction using the library function
-        geometrically_corrected = geometric_correction(
-            data=all_data,
+        geometric_delays = geometric_delay(
             altitude_km=altitude_km,
             sample_rate=sample_rate,
-            axis=0
         )
 
         # # Reference altitude for alignment
@@ -227,14 +211,24 @@ def process_channel(channel_name, science_ds, eng_ds, med_ds, sample_rate, stack
         # if roll_amount != 0:
         #     geometrically_corrected = np.roll(geometrically_corrected, -roll_amount, axis=1)
 
-        print(f"    Geometric correction complete")
+        print(f"    Geometric correction calculated")
     else:
         print(f"  Geometric correction skipped")
-        geometrically_corrected = all_data
+        geometric_delays = np.zeros_like(altitude_km)
 
-    # Step 6: Convert to amplitude in dB for visualization
-    print(f"  Converting to amplitude (dB)...")
-    amplitude_db = calculate_amplitude_db(geometrically_corrected)
+    # Step 6: Shift radargram data and convert to dB
+    # (doing these together is more memory-efficient
+    print(f"  Shift radargram data and calculate amplitude in dB")
+    amplitude_db = np.empty((len(all_hw_delays), dwell_compressed[0].shape[1]), dtype=np.float32)
+    total_delays = all_hw_delays - geometric_delays
+    total_delays -= np.mean(total_delays)
+    i0 = 0
+    for stacked in dwell_compressed:
+        i1 = i0 + stacked.shape[0]
+        dwell_delays = np.round(total_delays[i0:i1])
+        aligned = roll_radargram(stacked, dwell_delays)
+        amplitude_db[i0:i1] = calculate_amplitude_db(aligned)
+        i0 = i1
 
     return amplitude_db
 
@@ -247,10 +241,9 @@ def main():
     print("  1. Process each dwell separately (chirp params vary by dwell)")
     print("  2. Pulse compression (matched filter per dwell)")
     print("  3. Coherent stacking within each dwell")
-    print("  4. Delay alignment within each dwell")
-    print("  5. Concatenate all dwells")
-    print("  6. Geometric correction (optional)")
-    print("  7. Amplitude visualization")
+    print("  4. Delay correction calculation within each dwell")
+    print("  5. Geometric correction calculation (optional)")
+    print("  6. Record Alignment and Amplitude visualization")
 
     # Load data
     print(f"\nLoading data from {data_dir}...")
