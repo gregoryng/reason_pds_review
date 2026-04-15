@@ -170,16 +170,13 @@ def process_channel(channel_name, science_ds, eng_ds, med_ds, sample_rate, stack
                     assert len(med_stacked[key]) == len(stacked), "mismatch in med dataset %s dwell %r" % (key, dwell_id)
 
         # Step 4: Align records within dwell by delay
-        # TODO: I'm still missing some correction factor. See notes in align_by_delay
-        
         aligned, dly_roll_amount = align_by_delay(
             data=stacked,
             hw_rx_opening_ticks=eng_stacked['HW_RX_opening_ticks'],
             tx_start_ticks=eng_stacked['TX_start_ticks'],
             chirp_length_ticks=eng_stacked['Chirp_length_ticks'],
-            rx_window_length_ticks=eng_stacked['RX_window_length_ticks'],
-            raw_active_mode_length=eng_stacked['Raw_active_mode_length'],
             rx_delay_tracking_offset=eng_stacked['RX_delay_tracking_offset'],
+            sample_rate=sample_rate,
             axis=0
         )
 

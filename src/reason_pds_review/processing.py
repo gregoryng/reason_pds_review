@@ -387,9 +387,8 @@ def align_by_delay(data: np.ndarray,
                    hw_rx_opening_ticks: np.ndarray,
                    tx_start_ticks: np.ndarray,
                    chirp_length_ticks: np.ndarray,
-                   rx_window_length_ticks: np.ndarray,
-                   raw_active_mode_length: np.ndarray,
                    rx_delay_tracking_offset: np.ndarray,
+                   sample_rate: float,
                    axis: int = 0) -> np.ndarray:
     """
     Align fast time records by rolling to account for varying delays.
@@ -408,12 +407,10 @@ def align_by_delay(data: np.ndarray,
         TX start time in ticks for each pulse (slow_time,)
     chirp_length_ticks : np.ndarray
         Chirp length in ticks for each pulse (slow_time,)
-    rx_window_length_ticks : np.ndarray
-        RX window length in ticks for each pulse (slow_time,)
-    raw_active_mode_length : np.ndarray
-        Raw active mode length (number of fast time samples) for each pulse
     rx_delay_tracking_offset: np.ndarray
         RX delay tracking offset in 1/32 ticks (slow_time,)
+    sample_rate : float
+        Sample rate in Hz
     axis : int, optional
         Axis corresponding to slow time (default: 0)
 
@@ -427,8 +424,7 @@ def align_by_delay(data: np.ndarray,
     The delay between transmit pulse and receive window start is:
         delay_ticks = (hw_rx_opening_ticks - tx_start_ticks)
 
-    This is converted to samples using the sample rate derived from:
-        sample_rate = raw_active_mode_length / rx_window_length_ticks
+    This is converted to samples using ticks_per_sample.
 
     Each fast time record is then rolled by the computed sample offset.
     """
@@ -441,15 +437,10 @@ def align_by_delay(data: np.ndarray,
     # The delay between the transmit pulse and the start of the receive window is
     # (ENG:HW_RX_opening_ticks - ENG:TX_start_ticks), and offsets resulting from the
     # variability of the chirp length is ENG:chirp_length_ticks; when converted to a
-    # number of fast time samples using the sample rate
-    # (ENG:raw_active_mode_length/ENG:RX_window_length_ticks), you can roll each fast
-    # time record array to align.
-
-    # I believe I'm still missing some correction factor that varies by dwell here, but
-    # I haven't been able to figure out what.
-    # sample rate in samples per tick
-    sample_rate = raw_active_mode_length / rx_window_length_ticks
-    delay_samples = delay_ticks * sample_rate
+    # number of fast time samples using the number of ticks per sample
+    # you can roll each fast time record array to align.
+    ticks_per_sample = 48e6 / sample_rate
+    delay_samples = delay_ticks / ticks_per_sample
 
     # Compute roll amounts relative to first pulse
     #reference_delay = 0 #delay_samples[0]
