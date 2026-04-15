@@ -289,8 +289,7 @@ def align_by_delay(data: np.ndarray,
                    hw_rx_opening_ticks: np.ndarray,
                    tx_start_ticks: np.ndarray,
                    chirp_length_ticks: np.ndarray,
-                   rx_window_length_ticks: np.ndarray,
-                   raw_active_mode_length: np.ndarray,
+                   sample_rate: float,
                    axis: int = 0,
                    reference_delay_samples: Optional[float] = None) -> np.ndarray:
     """
@@ -310,10 +309,8 @@ def align_by_delay(data: np.ndarray,
         TX start time in ticks for each pulse (slow_time,)
     chirp_length_ticks : np.ndarray
         Chirp length in ticks for each pulse (slow_time,)
-    rx_window_length_ticks : np.ndarray
-        RX window length in ticks for each pulse (slow_time,)
-    raw_active_mode_length : np.ndarray
-        Raw active mode length (number of fast time samples) for each pulse
+    sample_rate : float
+        Sample rate in Hz
     axis : int, optional
         Axis corresponding to slow time (default: 0)
     reference_delay_samples : float, optional
@@ -333,9 +330,6 @@ def align_by_delay(data: np.ndarray,
     chirp_length_ticks is NOT included because pulse compression via
     scipy.signal.correlate(mode='same') centers the output.
 
-    This is converted to samples using the sample rate derived from:
-        sample_rate = raw_active_mode_length / rx_window_length_ticks
-
     Each fast time record is then rolled by the computed sample offset.
     """
     aligned_data = data.copy()
@@ -345,8 +339,8 @@ def align_by_delay(data: np.ndarray,
     # centers the pulse compression output, so no chirp-length offset is needed.
     delay_ticks = hw_rx_opening_ticks - tx_start_ticks
 
-    sample_rate = raw_active_mode_length / rx_window_length_ticks
-    delay_samples = delay_ticks * sample_rate
+    ticks_per_sample = 48e6 / sample_rate
+    delay_samples = delay_ticks / ticks_per_sample
 
     # Compute roll amounts relative to reference
     if reference_delay_samples is not None:

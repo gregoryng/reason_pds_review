@@ -164,8 +164,7 @@ def process_channel(channel_name, science_ds, eng_ds, med_ds, sample_rate, stack
             hw_rx_opening_ticks=eng_stacked['HW_RX_opening_ticks'],
             tx_start_ticks=eng_stacked['TX_start_ticks'],
             chirp_length_ticks=eng_stacked['Chirp_length_ticks'],
-            rx_window_length_ticks=eng_stacked['RX_window_length_ticks'],
-            raw_active_mode_length=eng_stacked['Raw_active_mode_length'],
+            sample_rate=sample_rate,
             axis=0,
             reference_delay_samples=global_ref_delay,
         )
