@@ -228,7 +228,7 @@ def generate_chirp(chirp_start_freq: float,
     # Time vector for the chirp
     t = np.linspace(0, duration_sec, duration_samples)
 
-    # Generate complex linear chirp
+    # Generate complex linear chirp centered at 0
     chirp_complex = signal.chirp(t, f0=f0, f1=f1, t1=t[-1], method='linear', phi=0, complex=True)
 
     # Apply window to suppress sidelobes
@@ -274,14 +274,18 @@ def pulse_compress(data: np.ndarray,
     >>> compressed = pulse_compress(raw_data, chirp, axis=1)
     """
 
-    # Apply cross-correlation along specified axis
-    # Use 'same' mode to maintain input length
-    compressed = np.apply_along_axis(
-        lambda m: signal.correlate(m, chirp, mode='same'),
-        axis=axis,
-        arr=data
-    )
+    def process_record(m):
+        """ Select the correct portion of the record for
+        the chirp length.  For some reason, 'same' doesn't
+        give the right result, but selecting the end of the
+        valid area does.  Perhaps due to phase ramp in chirp? """
+        y_full = signal.correlate(m, chirp, mode='full') # 'same')
+        #n0 = len(chirp) // 2 # this has same behavior as 'same'
+        n0 = len(chirp)
+        return y_full[n0 : n0 + len(m)]
 
+    # Apply cross-correlation along specified axis
+    compressed = np.apply_along_axis(process_record, axis=axis, arr=data)
     return compressed
 
 

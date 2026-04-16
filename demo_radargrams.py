@@ -311,7 +311,12 @@ def main():
             continue
 
     print(f"\nShared y-axis range: 0 to {max_fast_time_us:.2f} μs")
-
+    valid_db = {
+        'HF': 40,
+        'VHF_POSX': 40,
+        'VHF_NEGX': 40,
+        'VHF_FULL': 5,
+    }
     # Plot each channel
     for idx, channel_name in enumerate(CHANNEL_ORDER):
         if channel_name not in channel_data:
@@ -324,7 +329,7 @@ def main():
         ax = axes[idx]
 
         # Filter valid data for percentile calculation
-        valid_data = amplitude_db[amplitude_db > -100]
+        valid_data = amplitude_db[amplitude_db > valid_db[channel_name]]
 
         if len(valid_data) == 0:
             print(f"Warning: No valid data for {channel_name}")
